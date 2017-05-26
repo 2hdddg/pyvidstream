@@ -5,14 +5,36 @@ import signal
 import re
 from collections import namedtuple
 import logging
+import json
 
+""" A frame with a bunch of properties
+"""
+Frame = namedtuple('Frame', ['type', 'key_frame', 'width', 'height'])
 
+""" A group of pictures defined as a sequence
+of frames starting with an I frame that is also
+a keyframe (IDR) and all frames after that until
+next (but not including) I IDR frame.
+frames -- array of frames with the first one
+          always being an I IDR frame.
+before -- array of frames encountered before
+          the first I IDR frame.
+"""
+GOP = namedtuple('GOP', ['frames', 'before'])
+
+""" A frame with a qmap only has type (I/P/B) and
+a qmap that is an array of ints representing the
+qp value per macroblock
+"""
 QmapFrame = namedtuple('QmapFrame', ['type', 'qmap'])
 
-_logger = logging.getLogger(__name__)
-if not len(_logger.handlers):
-    _logger.addHandler(logging.StreamHandler())
-    _logger.setLevel(logging.INFO)
+_logger = None
+def _init_logging():
+    global _logger
+    _logger = logging.getLogger(__name__)
+    if not len(_logger.handlers):
+        _logger.addHandler(logging.StreamHandler())
+        _logger.setLevel(logging.INFO)
 
 
 class QmapParser:
@@ -45,7 +67,6 @@ class QmapParser:
             cont = True
             if self._type:
                 frame = QmapFrame(self._type, self._qmap)
-                _logger.info("Parsed frame, collecting..")
                 cont = self._collect(frame)
             self._type = m.group(1)
             self._qmap = []
@@ -68,6 +89,38 @@ class QmapParser:
         _logger.debug("Unknown line, increasing noise to %d:\n %s", self.noise, line)
 
         return True
+
+
+class FrameParser:
+    def __init__(self, collect):
+        self.noise = 0
+        self._collect = collect
+
+    def _parse_json(self, j):
+        if j['media_type'] != 'video':
+            return True
+
+        key_frame = j['key_frame'] == 1
+        pict_type = j['pict_type']
+        width = j['width']
+        height = j['height']
+
+        frame = Frame(type=pict_type, key_frame=key_frame, width=width, height=height)
+        return self._collect(frame)
+
+    def parse_line(self, line):
+        line = line.strip().rstrip(',')
+
+        if line == '}':
+            return False
+
+        try:
+            j = json.loads(line.strip().rstrip(','))
+        except ValueError as e:
+            self.noise = self.noise + 1
+            return True
+
+        return self._parse_json(j)
 
 
 def _put_line_in_queue(f, queue):
@@ -93,7 +146,7 @@ def _process_output(process, f, parser, line_timeout=3, max_num_timeouts=3, max_
                 break
             else:
                 num_timeouts = num_timeouts + 1
-                _logger.warning("Got line timeout number %d of %d" % (num_timeouts, max_num_timeouts))
+                _logger.warn("Got line timeout number %d of %d", num_timeouts, max_num_timeouts)
                 if num_timeouts > max_num_timeouts:
                     _logger.error("Reached max number of timeouts, aborting")
                     break
@@ -102,7 +155,7 @@ def _process_output(process, f, parser, line_timeout=3, max_num_timeouts=3, max_
                 break
 
             if parser.noise > max_noise:
-                _logger.error("Exceeded noise level %d, max is %d, aborting", (parser.noise, max_noise))
+                _logger.error("Exceeded noise level %d, max is %d, aborting", parser.noise, max_noise)
                 break
 
     process.send_signal(signal.SIGINT)
@@ -120,9 +173,12 @@ def get_n_qmaps(n, source, line_timeout=3):
 
     return tuple of success code and array of frames
     """
+    _init_logging()
     frames = []
+
     def collect(frame):
         frames.append(frame)
+        _logger.debug("Collected frame %d", len(frames))
         done = len(frames) == n
         if done:
             _logger.info("Collected %d frames, done" % n)
@@ -131,6 +187,8 @@ def get_n_qmaps(n, source, line_timeout=3):
 
 
     command = ['ffprobe',
+               '-v', 'quiet',
+               '-show_frames', # Need something...
                '-debug', 'qp']
     command.append(source)
 
@@ -146,16 +204,38 @@ def get_n_qmaps(n, source, line_timeout=3):
     return (len(frames)==n, frames)
 
 
-def get_n_gops(n, source, line_timeout=3):
-    pass
+def get_n_frames(n, source, line_timeout=30):
+    _init_logging()
+    frames = []
+
+    def collect(frame):
+        frames.append(frame)
+        _logger.debug("Collected frame %d", len(frames))
+        done = len(frames) == n
+        if done:
+            _logger.info("Collected %d frames, done" % n)
+        # Return value indicates if parser should  continue
+        return not done
+
+
+    command = ['ffprobe',
+               '-show_frames',
+               '-v', 'quiet',
+               '-print_format', 'json=compact=1']
+    command.append(source)
+
+    ffprobe = Popen(command, stdout=PIPE, bufsize=1)
+    parser = FrameParser(collect=collect)
+
+    _process_output(ffprobe, ffprobe.stdout, parser, line_timeout=line_timeout, max_num_timeouts=n, max_noise=70)
+
+    return (len(frames)==n, frames)
 
 
 if __name__ == '__main__':
     # Should succeed in getting 6 frames
     result = get_n_qmaps(n=6, source="rtsp://184.72.239.149/vod/mp4:BigBuckBunny_175k.mov")
     print "ok" if result[0] and len(result[1]) == 6 else "nok"
-    # Should fail when trying to get more than 6 frames
-    result = get_n_qmaps(n=7, source="rtsp://184.72.239.149/vod/mp4:BigBuckBunny_175k.mov")
-    print "ok" if not result[0] and len(result[1]) == 6 else "nok"
-
+    result = get_n_frames(10, source="rtsp://184.72.239.149/vod/mp4:BigBuckBunny_175k.mov")
+    print "ok" if result[0] and len(result[1]) == 10 else "nok"
 
