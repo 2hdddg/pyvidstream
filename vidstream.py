@@ -7,6 +7,7 @@ from collections import namedtuple
 import logging
 import json
 
+
 """ A frame with a bunch of properties
 """
 Frame = namedtuple('Frame', ['type', 'key_frame', 'width', 'height'])
@@ -17,16 +18,15 @@ a keyframe (IDR) and all frames after that until
 next (but not including) I IDR frame.
 frames -- array of frames with the first one
           always being an I IDR frame.
-before -- array of frames encountered before
-          the first I IDR frame.
 """
-GOP = namedtuple('GOP', ['frames', 'before'])
+GOP = namedtuple('GOP', ['frames'])
 
 """ A frame with a qmap only has type (I/P/B) and
 a qmap that is an array of ints representing the
 qp value per macroblock
 """
 QmapFrame = namedtuple('QmapFrame', ['type', 'qmap'])
+
 
 _logger = None
 def _init_logging():
@@ -47,7 +47,6 @@ class QmapParser:
 
         self.noise = 0
 
-
     def parse_line(self, line):
         """Parses a line of ffprobe output.
         line -- should be on format output by ffprobe
@@ -64,6 +63,7 @@ class QmapParser:
 
         m = re.match('^\[.*\] New frame, type: ([IPB])$', line)
         if m:
+            _logger.debug("Parser found start of new frame")
             cont = True
             if self._type:
                 frame = QmapFrame(self._type, self._qmap)
@@ -76,6 +76,7 @@ class QmapParser:
 
         m = re.match('^\[.*\] (\d*)$', line)
         if m:
+            _logger.debug("Parser found qmap digits")
             digits = m.group(1)
             for i in xrange(0, len(digits), 2):
                 qp = int(digits[i:i+2])
@@ -86,12 +87,14 @@ class QmapParser:
 
         # When not matching, increase noise level
         self.noise = self.noise + 1
-        _logger.debug("Unknown line, increasing noise to %d:\n %s", self.noise, line)
+        _logger.debug("Parser unknown line, increasing noise to %d:\n %s", self.noise, line)
 
         return True
 
 
 class FrameParser:
+    """ Parses ffprobe --show_frames compact json output
+    """
     def __init__(self, collect):
         self.noise = 0
         self._collect = collect
@@ -106,41 +109,53 @@ class FrameParser:
         height = j['height']
 
         frame = Frame(type=pict_type, key_frame=key_frame, width=width, height=height)
+
+        # Parsing ok, reset noise
+        self.noise = 0
+
         return self._collect(frame)
 
     def parse_line(self, line):
         line = line.strip().rstrip(',')
 
         if line == '}':
+            _logger.info("Parser encountered end of stream")
             return False
 
         try:
-            j = json.loads(line.strip().rstrip(','))
+            j = json.loads(line)
         except ValueError as e:
             self.noise = self.noise + 1
+            _logger.debug("Parser unknown line, increasing noise to %d:\n %s", self.noise, line)
             return True
 
         return self._parse_json(j)
 
 
 def _put_line_in_queue(f, queue):
+    # To be executed in a separate thread
     for line in iter(f.readline, ''):
         queue.put(line)
 
 
 def _process_output(process, f, parser, line_timeout=3, max_num_timeouts=3, max_noise=70):
+    # Will contain lines to parse
     queue = Queue()
+
+    # Read lines from separate thread
     thread = Thread(target=_put_line_in_queue, args=(f, queue))
     thread.start()
+
+    # Fail when max_num_timeouts reached
     num_timeouts = 0
 
     while True:
         try:
             line = queue.get(timeout=line_timeout)
+            _logger.debug("Got line to be parsed")
         except Empty:
             """ Timed out while waiting for a new line in queue,
-            this could mean that the stream is alive but just
-            slow. """
+            this could mean that the stream is alive or slow... """
             if process.poll() is not None:
                 _logger.error("Watched process exited with %d, aborting", process.returncode)
                 break
@@ -158,7 +173,9 @@ def _process_output(process, f, parser, line_timeout=3, max_num_timeouts=3, max_
                 _logger.error("Exceeded noise level %d, max is %d, aborting", parser.noise, max_noise)
                 break
 
+    # Let the process finish up nicely
     process.send_signal(signal.SIGINT)
+    # Could also wait and terminate to ensure exited
 
 
 def get_n_qmaps(n, source, line_timeout=3):
