@@ -39,6 +39,7 @@ def _init_logging():
 
 class QmapParser:
     """ Parses ffprobe 'debug pq' output
+    Produces QmapFrame instances.
     """
     def __init__(self, collect):
         self._type = None
@@ -94,6 +95,7 @@ class QmapParser:
 
 class FrameParser:
     """ Parses ffprobe --show_frames compact json output
+    Produces Frame instances.
     """
     def __init__(self, collect):
         self.noise = 0
@@ -133,7 +135,10 @@ class FrameParser:
 
 
 def _put_line_in_queue(f, queue):
-    # To be executed in a separate thread
+    """ To be executed in a separate thread.
+    Puts a line in the queue to be consumed by
+    main thread.
+    """
     for line in iter(f.readline, ''):
         queue.put(line)
 
@@ -166,6 +171,7 @@ def _process_output(process, f, parser, line_timeout=3, max_num_timeouts=3, max_
                     _logger.error("Reached max number of timeouts, aborting")
                     break
         else:
+            # Got a line to be parsed
             try:
                 cont = parser.parse_line(line)
             except:
@@ -179,7 +185,10 @@ def _process_output(process, f, parser, line_timeout=3, max_num_timeouts=3, max_
                 _logger.error("Exceeded noise level %d, max is %d, aborting", parser.noise, max_noise)
                 break
 
-    # Let the process finish up nicely
+    """ Let the process finish up nicely otherwise
+    the thread waiting for lines will not exit properly
+    and the program might appear to hang waiting for it.
+    """
     process.send_signal(signal.SIGINT)
     # Could also wait and terminate to ensure exited
 
