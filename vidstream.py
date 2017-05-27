@@ -10,7 +10,8 @@ import json
 
 """ A frame with a bunch of properties
 """
-Frame = namedtuple('Frame', ['type', 'key_frame', 'width', 'height'])
+Frame = namedtuple('Frame', ['type', 'key_frame', 'width', 'height',
+                             'coded_picture_number'])
 
 """ A group of pictures defined as a sequence
 of frames starting with an I frame that is also
@@ -29,6 +30,8 @@ QmapFrame = namedtuple('QmapFrame', ['type', 'qmap'])
 
 
 _logger = None
+
+
 def _init_logging():
     global _logger
     _logger = logging.getLogger(__name__)
@@ -88,7 +91,8 @@ class QmapParser:
 
         # When not matching, increase noise level
         self.noise = self.noise + 1
-        _logger.debug("Parser unknown line, increasing noise to %d:\n %s", self.noise, line)
+        _logger.debug("Parser unknown line, increasing "
+                      "noise to %d:\n %s", self.noise, line)
 
         return True
 
@@ -109,8 +113,11 @@ class FrameParser:
         pict_type = j['pict_type']
         width = j['width']
         height = j['height']
+        coded_picture_number = j['coded_picture_number']
 
-        frame = Frame(type=pict_type, key_frame=key_frame, width=width, height=height)
+        frame = Frame(type=pict_type, key_frame=key_frame,
+                      width=width, height=height,
+                      coded_picture_number=coded_picture_number)
 
         # Parsing ok, reset noise
         self.noise = 0
@@ -128,7 +135,8 @@ class FrameParser:
             j = json.loads(line)
         except ValueError as e:
             self.noise = self.noise + 1
-            _logger.debug("Parser unknown line, increasing noise to %d:\n %s", self.noise, line)
+            _logger.debug("Parser unknown line, increasing noise "
+                          "to %d:\n %s", self.noise, line)
             return True
 
         return self._parse_json(j)
@@ -143,7 +151,10 @@ def _put_line_in_queue(f, queue):
         queue.put(line)
 
 
-def _process_output(process, f, parser, line_timeout=3, max_num_timeouts=3, max_noise=70):
+def _process_output(process, f, parser,
+                    line_timeout=3, max_num_timeouts=3,
+                    max_noise=70):
+
     # Will contain lines to parse
     queue = Queue()
 
@@ -162,11 +173,13 @@ def _process_output(process, f, parser, line_timeout=3, max_num_timeouts=3, max_
             """ Timed out while waiting for a new line in queue,
             this could mean that the stream is alive or slow... """
             if process.poll() is not None:
-                _logger.error("Watched process exited with %d, aborting", process.returncode)
+                _logger.error("Watched process exited with %d, aborting",
+                              process.returncode)
                 break
             else:
                 num_timeouts = num_timeouts + 1
-                _logger.warn("Got line timeout number %d of %d", num_timeouts, max_num_timeouts)
+                _logger.warn("Got line timeout number %d of %d",
+                             num_timeouts, max_num_timeouts)
                 if num_timeouts > max_num_timeouts:
                     _logger.error("Reached max number of timeouts, aborting")
                     break
@@ -182,7 +195,8 @@ def _process_output(process, f, parser, line_timeout=3, max_num_timeouts=3, max_
                 break
 
             if parser.noise > max_noise:
-                _logger.error("Exceeded noise level %d, max is %d, aborting", parser.noise, max_noise)
+                _logger.error("Exceeded noise level %d, max is %d, aborting",
+                              parser.noise, max_noise)
                 break
 
     """ Let the process finish up nicely otherwise
@@ -217,23 +231,25 @@ def get_n_qmaps(n, source, line_timeout=3):
         # Return value indicates if parser should  continue
         return not done
 
-
     command = ['ffprobe',
                '-v', 'quiet',
-               '-show_frames', # Need something...
+               '-show_frames',  # Need something...
                '-debug', 'qp']
     command.append(source)
 
     ffprobe = Popen(command, stderr=PIPE, bufsize=1)
     parser = QmapParser(collect=collect)
 
-    """ Setting max_num_timeouts to n to allow one timeout per frame for low framerates.
-    max_noise is set to account for very noisy start of stream, could be set to a lower
-    value if we decide to ignore some in the start.
+    """ Setting max_num_timeouts to n to allow one timeout per frame
+    for low framerates. max_noise is set to account for very noisy start
+    of stream, could be set to a lower value if we decide to ignore
+    some in the start.
     """
-    _process_output(ffprobe, ffprobe.stderr, parser, line_timeout=line_timeout, max_num_timeouts=n, max_noise=70)
+    _process_output(ffprobe, ffprobe.stderr, parser,
+                    line_timeout=line_timeout, max_num_timeouts=n,
+                    max_noise=70)
 
-    return (len(frames)==n, frames)
+    return (len(frames) == n, frames)
 
 
 def get_n_frames(n, source, line_timeout=30):
@@ -249,7 +265,6 @@ def get_n_frames(n, source, line_timeout=30):
         # Return value indicates if parser should  continue
         return not done
 
-
     command = ['ffprobe',
                '-show_frames',
                '-v', 'quiet',
@@ -259,15 +274,17 @@ def get_n_frames(n, source, line_timeout=30):
     ffprobe = Popen(command, stdout=PIPE, bufsize=1)
     parser = FrameParser(collect=collect)
 
-    _process_output(ffprobe, ffprobe.stdout, parser, line_timeout=line_timeout, max_num_timeouts=n, max_noise=70)
+    _process_output(ffprobe, ffprobe.stdout, parser,
+                    line_timeout=line_timeout, max_num_timeouts=n,
+                    max_noise=70)
 
-    return (len(frames)==n, frames)
+    return (len(frames) == n, frames)
 
 
 def get_n_gops(n, source, line_timeout=30):
     _init_logging()
     gops = []
-    state = { 'frames': None, 'gops': gops }
+    state = {'frames': None, 'gops': gops}
 
     def collect(frame):
 
@@ -293,7 +310,6 @@ def get_n_gops(n, source, line_timeout=30):
 
         return True
 
-
     command = ['ffprobe',
                '-show_frames',
                '-v', 'quiet',
@@ -303,16 +319,19 @@ def get_n_gops(n, source, line_timeout=30):
     ffprobe = Popen(command, stdout=PIPE, bufsize=1)
     parser = FrameParser(collect=collect)
 
-    _process_output(ffprobe, ffprobe.stdout, parser, line_timeout=line_timeout, max_num_timeouts=n, max_noise=70)
+    _process_output(ffprobe, ffprobe.stdout, parser,
+                    line_timeout=line_timeout, max_num_timeouts=n,
+                    max_noise=70)
 
-    return (len(gops)==n, gops)
+    return (len(gops) == n, gops)
 
 
 if __name__ == '__main__':
-    result = get_n_qmaps(n=6, source="rtsp://184.72.239.149/vod/mp4:BigBuckBunny_175k.mov")
+    source = "rtsp://184.72.239.149/vod/mp4:BigBuckBunny_175k.mov"
+    result = get_n_qmaps(n=6, source=source)
     print "ok" if result[0] and len(result[1]) == 6 else "nok"
-    result = get_n_frames(10, source="rtsp://184.72.239.149/vod/mp4:BigBuckBunny_175k.mov")
+    result = get_n_frames(10,
+                          source=source)
     print "ok" if result[0] and len(result[1]) == 10 else "nok"
-    result = get_n_gops(2, source="rtsp://184.72.239.149/vod/mp4:BigBuckBunny_175k.mov")
+    result = get_n_gops(2, source=source)
     print "ok" if result[0] and len(result[1]) == 2 else "nok"
-
