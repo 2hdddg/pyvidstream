@@ -166,7 +166,13 @@ def _process_output(process, f, parser, line_timeout=3, max_num_timeouts=3, max_
                     _logger.error("Reached max number of timeouts, aborting")
                     break
         else:
-            if not parser.parse_line(line):
+            try:
+                cont = parser.parse_line(line)
+            except:
+                _logger.exception("Parser exception")
+                break
+
+            if not cont:
                 break
 
             if parser.noise > max_noise:
@@ -249,10 +255,55 @@ def get_n_frames(n, source, line_timeout=30):
     return (len(frames)==n, frames)
 
 
+def get_n_gops(n, source, line_timeout=30):
+    _init_logging()
+    gops = []
+    state = { 'frames': None, 'gops': gops }
+
+    def collect(frame):
+
+        if frame.key_frame and frame.type == 'I':
+            # Start of new gop
+            if state['frames']:
+                gop = GOP(frames=state['frames'])
+                state['gops'].append(gop)
+
+            state['frames'] = []
+            state['frames'].append(frame)
+            done = len(state['gops']) == n
+            if done:
+                _logger.info("Collected %d gops, done" % n)
+
+            return not done
+
+        if state['frames']:
+            _logger.debug("Collecting frame to gop")
+            state['frames'].append(frame)
+        else:
+            _logger.info("Skipping frame before start of first gop")
+
+        return True
+
+
+    command = ['ffprobe',
+               '-show_frames',
+               '-v', 'quiet',
+               '-print_format', 'json=compact=1']
+    command.append(source)
+
+    ffprobe = Popen(command, stdout=PIPE, bufsize=1)
+    parser = FrameParser(collect=collect)
+
+    _process_output(ffprobe, ffprobe.stdout, parser, line_timeout=line_timeout, max_num_timeouts=n, max_noise=70)
+
+    return (len(gops)==n, gops)
+
+
 if __name__ == '__main__':
-    # Should succeed in getting 6 frames
     result = get_n_qmaps(n=6, source="rtsp://184.72.239.149/vod/mp4:BigBuckBunny_175k.mov")
     print "ok" if result[0] and len(result[1]) == 6 else "nok"
     result = get_n_frames(10, source="rtsp://184.72.239.149/vod/mp4:BigBuckBunny_175k.mov")
     print "ok" if result[0] and len(result[1]) == 10 else "nok"
+    result = get_n_gops(2, source="rtsp://184.72.239.149/vod/mp4:BigBuckBunny_175k.mov")
+    print "ok" if result[0] and len(result[1]) == 2 else "nok"
 
