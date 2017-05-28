@@ -181,7 +181,8 @@ def _process_output(process, f, parser,
                 _logger.warn("Got line timeout number %d of %d",
                              num_timeouts, max_num_timeouts)
                 if num_timeouts > max_num_timeouts:
-                    _logger.error("Reached max number of timeouts, aborting")
+                    _logger.error("Reached max number of timeouts, "
+                                  "aborting")
                     break
         else:
             # Got a line to be parsed
@@ -214,7 +215,6 @@ def get_n_qmaps(n, source, line_timeout=3):
 
     n -- number of frames to retrieve
     source -- url or path to video.
-              Example: rtsp://184.72.239.149/vod/mp4:BigBuckBunny_175k.mov
     line_timeout -- number of seconds to wait for input
 
     return tuple of success code and array of frames
