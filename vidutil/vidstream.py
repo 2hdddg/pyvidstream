@@ -196,7 +196,8 @@ def _process_output(process, f, parser,
                 break
 
             if parser.noise > max_noise:
-                _logger.error("Exceeded noise level %d, max is %d, aborting",
+                _logger.error("Exceeded noise level %d, max is %d," \
+                              " aborting",
                               parser.noise, max_noise)
                 break
 
@@ -204,7 +205,13 @@ def _process_output(process, f, parser,
     the thread waiting for lines will not exit properly
     and the program might appear to hang waiting for it.
     """
-    process.send_signal(signal.SIGINT)
+    try:
+        process.send_signal(signal.SIGINT)
+    except OSError as e:
+        if e.errno == 3:
+            _logger.error("Process already exited.")
+        else:
+            raise e
     # Could also wait and terminate to ensure exited
 
 
